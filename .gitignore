@@ -111,3 +111,6 @@ all.config
 
 # Kdevelop4
 *.kdev4
+
+# Object directory
+out/
