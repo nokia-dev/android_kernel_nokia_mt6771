@@ -277,6 +277,10 @@ static void fw_free_buf(struct firmware_buf *buf)
 static char fw_path_para[256];
 static const char * const fw_path[] = {
 	fw_path_para,
+/* add for AW87329 --- st, */
+  "/system/vendor/firmware",
+  "/system/etc/firmware",
+/* add for AW87329 --- ed, */
 	"/lib/firmware/updates/" UTS_RELEASE,
 	"/lib/firmware/updates",
 	"/lib/firmware/" UTS_RELEASE,

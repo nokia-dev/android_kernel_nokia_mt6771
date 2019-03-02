@@ -862,10 +862,7 @@ static netdev_tx_t tun_net_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (unlikely(skb_orphan_frags(skb, GFP_ATOMIC)))
 		goto drop;
 
-	if (skb->sk && sk_fullsock(skb->sk)) {
-		sock_tx_timestamp(skb->sk, &skb_shinfo(skb)->tx_flags);
-		sw_tx_timestamp(skb);
-	}
+	skb_tx_timestamp(skb);
 
 	/* Orphan the skb - required as we might hang on to it
 	 * for indefinite time.
@@ -1189,6 +1186,17 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 			tun->dev->stats.rx_frame_errors++;
 			kfree_skb(skb);
 			return -EINVAL;
+		}
+	}
+
+	/* gro on: clatd checksum fail patch
+	* if is nornal and gro packet, not calculate tcp's checksum
+	*/
+	if (pi.flags & htons(0xF000)) {
+		skb->ip_summed = CHECKSUM_UNNECESSARY;
+		if (pi.flags & htons(0x0F00)) {
+			skb_shinfo(skb)->gso_size = 1;
+			skb_shinfo(skb)->gso_type = 1;
 		}
 	}
 
@@ -1891,6 +1899,12 @@ static long __tun_chr_ioctl(struct file *file, unsigned int cmd,
 	unsigned int ifindex;
 	int le;
 	int ret;
+
+#ifdef CONFIG_ANDROID_PARANOID_NETWORK
+	if (cmd != TUNGETIFF && !capable(CAP_NET_ADMIN)) {
+		return -EPERM;
+	}
+#endif
 
 	if (cmd == TUNSETIFF || cmd == TUNSETQUEUE || _IOC_TYPE(cmd) == 0x89) {
 		if (copy_from_user(&ifr, argp, ifreq_len))

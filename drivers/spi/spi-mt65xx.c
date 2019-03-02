@@ -21,6 +21,7 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_gpio.h>
+#include <linux/of_address.h>
 #include <linux/platform_device.h>
 #include <linux/platform_data/spi-mt65xx.h>
 #include <linux/pm_runtime.h>
@@ -35,11 +36,17 @@
 #define SPI_CMD_REG                       0x0018
 #define SPI_STATUS0_REG                   0x001c
 #define SPI_PAD_SEL_REG                   0x0024
+#define SPI_CFG2_REG                      0x0028
+#define SPI_TX_SRC_REG_64                 0x002c
+#define SPI_RX_DST_REG_64                 0x0030
 
 #define SPI_CFG0_SCK_HIGH_OFFSET          0
 #define SPI_CFG0_SCK_LOW_OFFSET           8
 #define SPI_CFG0_CS_HOLD_OFFSET           16
 #define SPI_CFG0_CS_SETUP_OFFSET          24
+#define SPI_ADJUST_CFG0_SCK_LOW_OFFSET    16
+#define SPI_ADJUST_CFG0_CS_HOLD_OFFSET    0
+#define SPI_ADJUST_CFG0_CS_SETUP_OFFSET   16
 
 #define SPI_CFG1_CS_IDLE_OFFSET           0
 #define SPI_CFG1_PACKET_LOOP_OFFSET       8
@@ -55,6 +62,8 @@
 #define SPI_CMD_RST                  BIT(2)
 #define SPI_CMD_PAUSE_EN             BIT(4)
 #define SPI_CMD_DEASSERT             BIT(5)
+#define SPI_CMD_SAMPLE_SEL           BIT(6)
+#define SPI_CMD_CS_POL               BIT(7)
 #define SPI_CMD_CPHA                 BIT(8)
 #define SPI_CMD_CPOL                 BIT(9)
 #define SPI_CMD_RX_DMA               BIT(10)
@@ -75,15 +84,27 @@
 
 #define MTK_SPI_MAX_FIFO_SIZE 32
 #define MTK_SPI_PACKET_SIZE 1024
+#define SPI_1G_SIZE         (0x40000000)
+#define ADDRSHIFT_R_OFFSET  (6)
+#define ADDRSHIFT_R_MASK    (0xFFFFF03F)
+#define ADDRSHIFT_W_MASK    (0xFFFFFFC0)
+#define MTK_SPI_32BIS_MASK  (0xFFFFFFFF)
+#define MTK_SPI_32BIS_SHIFT (32)
 
 struct mtk_spi_compatible {
 	bool need_pad_sel;
 	/* Must explicitly send dummy Tx bytes to do Rx only transfer */
 	bool must_tx;
+	/* some IC design adjust register define */
+	bool adjust_reg;
+	/*some chip support 8GB DRAM access, there are two kinds solutions*/
+	bool dma_8gb_v1;
+	bool dma_8gb_v2;
 };
 
 struct mtk_spi {
 	void __iomem *base;
+	void __iomem *peri_regs;
 	u32 state;
 	int pad_num;
 	u32 *pad_sel;
@@ -93,10 +114,30 @@ struct mtk_spi {
 	struct scatterlist *tx_sgl, *rx_sgl;
 	u32 tx_sgl_len, rx_sgl_len;
 	const struct mtk_spi_compatible *dev_comp;
+	u32 dram_8gb_offset;
 };
 
-static const struct mtk_spi_compatible mt6589_compat;
-static const struct mtk_spi_compatible mt8135_compat;
+static const struct mtk_spi_compatible mtk_common_compat;
+static const struct mtk_spi_compatible mt6758_compat = {
+	.need_pad_sel = true,
+	.adjust_reg = true,
+	.dma_8gb_v1 = true,
+};
+static const struct mtk_spi_compatible mt6775_compat = {
+	.need_pad_sel = true,
+	.adjust_reg = true,
+	.dma_8gb_v1 = true,
+};
+static const struct mtk_spi_compatible mt6771_compat = {
+	.need_pad_sel = true,
+	.adjust_reg = true,
+	.dma_8gb_v2 = true,
+};
+static const struct mtk_spi_compatible mt6739_compat = {
+	.need_pad_sel = true,
+	.adjust_reg = true,
+	.dma_8gb_v2 = true,
+};
 static const struct mtk_spi_compatible mt8173_compat = {
 	.need_pad_sel = true,
 	.must_tx = true,
@@ -109,12 +150,35 @@ static const struct mtk_spi_compatible mt8173_compat = {
 static const struct mtk_chip_config mtk_default_chip_info = {
 	.rx_mlsb = 1,
 	.tx_mlsb = 1,
+	.cs_pol = 0,
+	.sample_sel = 0,
 };
 
 static const struct of_device_id mtk_spi_of_match[] = {
-	{ .compatible = "mediatek,mt6589-spi", .data = (void *)&mt6589_compat },
-	{ .compatible = "mediatek,mt8135-spi", .data = (void *)&mt8135_compat },
-	{ .compatible = "mediatek,mt8173-spi", .data = (void *)&mt8173_compat },
+	{ .compatible = "mediatek,mt6589-spi",
+		.data = (void *)&mtk_common_compat,
+	},
+	{ .compatible = "mediatek,mt6758-spi",
+		.data = (void *)&mt6758_compat,
+	},
+	{ .compatible = "mediatek,mt6739-spi",
+		.data = (void *)&mt6739_compat,
+	},
+	{ .compatible = "mediatek,mt6775-spi",
+		.data = (void *)&mt6775_compat,
+	},
+	{ .compatible = "mediatek,mt6771-spi",
+		.data = (void *)&mt6771_compat,
+	},
+	{ .compatible = "mediatek,mt8135-spi",
+		.data = (void *)&mtk_common_compat,
+	},
+	{ .compatible = "mediatek,mt8167-spi",
+		.data = (void *)&mtk_common_compat,
+	},
+	{ .compatible = "mediatek,mt8173-spi",
+		.data = (void *)&mt8173_compat,
+	},
 	{}
 };
 MODULE_DEVICE_TABLE(of, mtk_spi_of_match);
@@ -154,9 +218,6 @@ static int mtk_spi_prepare_message(struct spi_master *master,
 		reg_val |= SPI_CMD_CPOL;
 	else
 		reg_val &= ~SPI_CMD_CPOL;
-	writel(reg_val, mdata->base + SPI_CMD_REG);
-
-	reg_val = readl(mdata->base + SPI_CMD_REG);
 
 	/* set the mlsbx and mlsbtx */
 	if (chip_config->tx_mlsb)
@@ -176,6 +237,17 @@ static int mtk_spi_prepare_message(struct spi_master *master,
 	reg_val |= SPI_CMD_TX_ENDIAN;
 	reg_val |= SPI_CMD_RX_ENDIAN;
 #endif
+
+	if (mdata->dev_comp->adjust_reg) {
+		if (chip_config->cs_pol)
+			reg_val |= SPI_CMD_CS_POL;
+		else
+			reg_val &= ~SPI_CMD_CS_POL;
+		if (chip_config->sample_sel)
+			reg_val |= SPI_CMD_SAMPLE_SEL;
+		else
+			reg_val &= ~SPI_CMD_SAMPLE_SEL;
+	}
 
 	/* set finish and pause interrupt always enable */
 	reg_val |= SPI_CMD_FINISH_IE | SPI_CMD_PAUSE_IE;
@@ -228,11 +300,23 @@ static void mtk_spi_prepare_transfer(struct spi_master *master,
 	sck_time = (div + 1) / 2;
 	cs_time = sck_time * 2;
 
-	reg_val |= (((sck_time - 1) & 0xff) << SPI_CFG0_SCK_HIGH_OFFSET);
-	reg_val |= (((sck_time - 1) & 0xff) << SPI_CFG0_SCK_LOW_OFFSET);
-	reg_val |= (((cs_time - 1) & 0xff) << SPI_CFG0_CS_HOLD_OFFSET);
-	reg_val |= (((cs_time - 1) & 0xff) << SPI_CFG0_CS_SETUP_OFFSET);
-	writel(reg_val, mdata->base + SPI_CFG0_REG);
+	if (mdata->dev_comp->adjust_reg) {
+		reg_val |= (((sck_time - 1) & 0xffff) << SPI_CFG0_SCK_HIGH_OFFSET);
+		reg_val |= (((sck_time - 1) & 0xffff)
+			   << SPI_ADJUST_CFG0_SCK_LOW_OFFSET);
+		writel(reg_val, mdata->base + SPI_CFG2_REG);
+		reg_val |= (((cs_time - 1) & 0xffff)
+			   << SPI_ADJUST_CFG0_CS_HOLD_OFFSET);
+		reg_val |= (((cs_time - 1) & 0xffff)
+			   << SPI_ADJUST_CFG0_CS_SETUP_OFFSET);
+		writel(reg_val, mdata->base + SPI_CFG0_REG);
+	} else {
+		reg_val |= (((sck_time - 1) & 0xff) << SPI_CFG0_SCK_HIGH_OFFSET);
+		reg_val |= (((sck_time - 1) & 0xff) << SPI_CFG0_SCK_LOW_OFFSET);
+		reg_val |= (((cs_time - 1) & 0xff) << SPI_CFG0_CS_HOLD_OFFSET);
+		reg_val |= (((cs_time - 1) & 0xff) << SPI_CFG0_CS_SETUP_OFFSET);
+		writel(reg_val, mdata->base + SPI_CFG0_REG);
+	}
 
 	reg_val = readl(mdata->base + SPI_CFG1_REG);
 	reg_val &= ~SPI_CFG1_CS_IDLE_MASK;
@@ -311,19 +395,56 @@ static void mtk_spi_update_mdata_len(struct spi_master *master)
 static void mtk_spi_setup_dma_addr(struct spi_master *master,
 				   struct spi_transfer *xfer)
 {
+	u32 addr_ext = 0;
 	struct mtk_spi *mdata = spi_master_get_devdata(master);
 
-	if (mdata->tx_sgl)
-		writel(xfer->tx_dma, mdata->base + SPI_TX_SRC_REG);
-	if (mdata->rx_sgl)
-		writel(xfer->rx_dma, mdata->base + SPI_RX_DST_REG);
+	if (mdata->dev_comp->dma_8gb_v1) {
+		if (mdata->tx_sgl) {
+			addr_ext = readl(mdata->peri_regs + mdata->dram_8gb_offset);
+			addr_ext = ((addr_ext & (ADDRSHIFT_W_MASK)) |
+				(u32)(cpu_to_le64(xfer->tx_dma) / SPI_1G_SIZE));
+			writel(addr_ext, mdata->dram_8gb_offset + mdata->peri_regs);
+			writel((u32)(cpu_to_le64(xfer->tx_dma) % SPI_1G_SIZE),
+				mdata->base + SPI_TX_SRC_REG);
+		}
+		if (mdata->rx_sgl) {
+			addr_ext = readl(mdata->peri_regs + mdata->dram_8gb_offset);
+			addr_ext = ((addr_ext & (ADDRSHIFT_R_MASK)) |
+				(u32)((cpu_to_le64(xfer->rx_dma) / SPI_1G_SIZE)
+				<< ADDRSHIFT_R_OFFSET));
+			writel(addr_ext, mdata->dram_8gb_offset + mdata->peri_regs);
+			writel((u32)(cpu_to_le64(xfer->rx_dma) % SPI_1G_SIZE),
+				mdata->base + SPI_RX_DST_REG);
+		}
+	} else if (mdata->dev_comp->dma_8gb_v2) {
+		if (mdata->tx_sgl) {
+			writel((u32)(cpu_to_le64(xfer->tx_dma) & MTK_SPI_32BIS_MASK), mdata->base + SPI_TX_SRC_REG);
+#ifdef CONFIG_ARCH_DMA_ADDR_T_64BIT
+			writel((u32)(cpu_to_le64(xfer->tx_dma) >> MTK_SPI_32BIS_SHIFT),
+				mdata->base + SPI_TX_SRC_REG_64);
+#endif
+		}
+		if (mdata->rx_sgl) {
+			writel((u32)(cpu_to_le64(xfer->rx_dma) & MTK_SPI_32BIS_MASK), mdata->base + SPI_RX_DST_REG);
+#ifdef CONFIG_ARCH_DMA_ADDR_T_64BIT
+			writel((u32)(cpu_to_le64(xfer->rx_dma) >> MTK_SPI_32BIS_SHIFT),
+				mdata->base + SPI_RX_DST_REG_64);
+#endif
+		}
+	} else {
+		if (mdata->tx_sgl)
+			writel(xfer->tx_dma, mdata->base + SPI_TX_SRC_REG);
+		if (mdata->rx_sgl)
+			writel(xfer->rx_dma, mdata->base + SPI_RX_DST_REG);
+	}
 }
 
 static int mtk_spi_fifo_transfer(struct spi_master *master,
 				 struct spi_device *spi,
 				 struct spi_transfer *xfer)
 {
-	int cnt;
+	int cnt, remainder;
+	u32 reg_val;
 	struct mtk_spi *mdata = spi_master_get_devdata(master);
 
 	mdata->cur_transfer = xfer;
@@ -331,11 +452,16 @@ static int mtk_spi_fifo_transfer(struct spi_master *master,
 	mtk_spi_prepare_transfer(master, xfer);
 	mtk_spi_setup_packet(master);
 
-	if (xfer->len % 4)
-		cnt = xfer->len / 4 + 1;
-	else
-		cnt = xfer->len / 4;
-	iowrite32_rep(mdata->base + SPI_TX_DATA_REG, xfer->tx_buf, cnt);
+	cnt = xfer->len / 4;
+	if (xfer->tx_buf)
+		iowrite32_rep(mdata->base + SPI_TX_DATA_REG, xfer->tx_buf, cnt);
+
+	remainder = xfer->len % 4;
+	if (xfer->tx_buf && remainder > 0) {
+		reg_val = 0;
+		memcpy(&reg_val, xfer->tx_buf + (cnt * 4), remainder);
+		writel(reg_val, mdata->base + SPI_TX_DATA_REG);
+	}
 
 	mtk_spi_enable_transfer(master);
 
@@ -418,7 +544,7 @@ static int mtk_spi_setup(struct spi_device *spi)
 
 static irqreturn_t mtk_spi_interrupt(int irq, void *dev_id)
 {
-	u32 cmd, reg_val, cnt;
+	u32 cmd, reg_val, cnt, remainder;
 	struct spi_master *master = dev_id;
 	struct mtk_spi *mdata = spi_master_get_devdata(master);
 	struct spi_transfer *trans = mdata->cur_transfer;
@@ -431,12 +557,15 @@ static irqreturn_t mtk_spi_interrupt(int irq, void *dev_id)
 
 	if (!master->can_dma(master, master->cur_msg->spi, trans)) {
 		if (trans->rx_buf) {
-			if (mdata->xfer_len % 4)
-				cnt = mdata->xfer_len / 4 + 1;
-			else
-				cnt = mdata->xfer_len / 4;
+			cnt = mdata->xfer_len / 4;
 			ioread32_rep(mdata->base + SPI_RX_DATA_REG,
 				     trans->rx_buf, cnt);
+			remainder = mdata->xfer_len % 4;
+			if (remainder > 0) {
+				reg_val = readl(mdata->base + SPI_RX_DATA_REG);
+				memcpy(trans->rx_buf + (cnt * 4),
+					&reg_val, remainder);
+			}
 		}
 		spi_finalize_current_transfer(master);
 		return IRQ_HANDLED;
@@ -488,6 +617,7 @@ static int mtk_spi_probe(struct platform_device *pdev)
 	const struct of_device_id *of_id;
 	struct resource *res;
 	int i, irq, ret;
+	struct device_node *node_pericfg;
 
 	master = spi_alloc_master(&pdev->dev, sizeof(*mdata));
 	if (!master) {
@@ -610,17 +740,16 @@ static int mtk_spi_probe(struct platform_device *pdev)
 	ret = clk_set_parent(mdata->sel_clk, mdata->parent_clk);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "failed to clk_set_parent (%d)\n", ret);
-		goto err_disable_clk;
+		clk_disable_unprepare(mdata->spi_clk);
+		goto err_put_master;
 	}
-
-	clk_disable_unprepare(mdata->spi_clk);
 
 	pm_runtime_enable(&pdev->dev);
 
 	ret = devm_spi_register_master(&pdev->dev, master);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to register master (%d)\n", ret);
-		goto err_put_master;
+		goto err_disable_runtime_pm;
 	}
 
 	if (mdata->dev_comp->need_pad_sel) {
@@ -629,14 +758,14 @@ static int mtk_spi_probe(struct platform_device *pdev)
 				"pad_num does not match num_chipselect(%d != %d)\n",
 				mdata->pad_num, master->num_chipselect);
 			ret = -EINVAL;
-			goto err_put_master;
+			goto err_disable_runtime_pm;
 		}
 
 		if (!master->cs_gpios && master->num_chipselect > 1) {
 			dev_err(&pdev->dev,
 				"cs_gpios not specified and num_chipselect > 1\n");
 			ret = -EINVAL;
-			goto err_put_master;
+			goto err_disable_runtime_pm;
 		}
 
 		if (master->cs_gpios) {
@@ -647,16 +776,37 @@ static int mtk_spi_probe(struct platform_device *pdev)
 				if (ret) {
 					dev_err(&pdev->dev,
 						"can't get CS GPIO %i\n", i);
-					goto err_put_master;
+					goto err_disable_runtime_pm;
 				}
 			}
 		}
 	}
 
+	if (mdata->dev_comp->dma_8gb_v1) {
+		node_pericfg = of_find_compatible_node(NULL, NULL, "mediatek,pericfg");
+		if (!node_pericfg) {
+			dev_err(&pdev->dev, "error: node_pericfg init fail\n");
+			goto err_disable_runtime_pm;
+		}
+		mdata->peri_regs = of_iomap(node_pericfg, 0);
+		if (IS_ERR(*(void **)&(mdata->peri_regs))) {
+			ret = PTR_ERR(*(void **)&mdata->peri_regs);
+			dev_err(&pdev->dev, "error: ms->peri_regs init fail\n");
+			mdata->peri_regs = NULL;
+			goto err_disable_runtime_pm;
+		}
+		if (of_property_read_u32(pdev->dev.of_node, "mediatek,dram-8gb-offset",
+								&mdata->dram_8gb_offset)) {
+			dev_err(&pdev->dev, "SPI get dram-8gb-offset failed\n");
+			goto err_disable_runtime_pm;
+		}
+	}
+	clk_disable_unprepare(mdata->spi_clk);
+
 	return 0;
 
-err_disable_clk:
-	clk_disable_unprepare(mdata->spi_clk);
+err_disable_runtime_pm:
+	pm_runtime_disable(&pdev->dev);
 err_put_master:
 	spi_master_put(master);
 

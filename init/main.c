@@ -88,14 +88,15 @@
 #include <asm/sections.h>
 #include <asm/cacheflush.h>
 
+#ifdef CONFIG_MTK_RAM_CONSOLE
+#include <mt-plat/mtk_ram_console.h>
+#endif
+
 static int kernel_init(void *);
 
 extern void init_IRQ(void);
 extern void fork_init(void);
 extern void radix_tree_init(void);
-#ifndef CONFIG_DEBUG_RODATA
-static inline void mark_rodata_ro(void) { }
-#endif
 
 /*
  * Debug helper: via this flag we know that we are in 'early bootup code'
@@ -372,6 +373,358 @@ static void __init setup_command_line(char *command_line)
 	strcpy(static_command_line, command_line);
 }
 
+
+
+/* Begin, for OEM feature, 20171201 */
+char fih_skuid[8] = {'0'};
+bool fih_efuse_enable = 1;
+unsigned short fih_hwid = 0xFF;
+
+unsigned short fih_gethwid(void)
+{
+	unsigned char proj = 0, phase = 0, module = 0;
+	char *pattern = "fih_hwid=";
+	char *p = strstr(saved_command_line, pattern);
+	unsigned short ret = 0;
+        unsigned char temp = 0;
+
+	if (p == NULL)
+		return ret;
+
+	p += strlen(pattern);
+	p = p + 2; // skip '0' & 'x'
+
+	module = *p++ - '0';
+	//phase  = *p++ - '0';
+	temp = *p++;
+ pr_err("!!!!!!!!!!!!!!temp=0x%x\n",temp);
+
+        if((temp >= '0') && (temp <= '9'))
+                phase = temp - '0';
+        else if((temp >= 'a') && (temp <= 'f'))
+                phase = temp - 'a' + 10;
+        else if((temp >= 'A') && (temp <= 'F'))
+                phase = temp - 'A' + 10;
+ pr_err("!!!!!!!!!!!!!!phase=0x%x\n",phase);
+
+	if((*p >= '0') && (*p <= '9'))
+		proj = *p - '0';
+	else if((*p >= 'a') && (*p <= 'f'))
+		proj = *p - 'a' + 10;
+	else if((*p >= 'A') && (*p <= 'F'))
+		proj = *p - 'A' + 10;
+
+	ret = proj | (phase << 4) | (module << 8);
+ pr_err("!!!!!!!!!!!!!!ret=0x%x\n",ret);
+	return ret;
+}
+EXPORT_SYMBOL(fih_gethwid);
+
+/*sunjie + for runin*/
+unsigned int fih_get_ramtest_result(void)
+{
+    unsigned char result=0;
+    char *pattern = "ramtest_result=";
+    char *p = strstr(saved_command_line, pattern);
+    unsigned short ret=0;
+
+    if (p == NULL)
+		return ret;
+
+    p += strlen(pattern);
+    p = p + 2; // skip '0' & 'x'
+    if((*p >= '0') && (*p <= '9'))
+                result = *p - '0';
+    else if((*p >= 'a') && (*p <= 'f'))
+                result = *p - 'a' + 10;
+    else if((*p >= 'A') && (*p <= 'F'))
+        result = *p - 'A' + 10;
+    ret = result;
+    return ret;
+}
+EXPORT_SYMBOL(fih_get_ramtest_result);
+
+extern unsigned long long fih_mmc_size(void)
+{
+	unsigned char a = 0;
+	int i;
+
+	char *pattern = "emmc_total_size=";
+	char *p = strstr(saved_command_line, pattern);
+
+	unsigned long long  ret = 0;
+
+	if (p == NULL)
+		return ret;
+
+	p += strlen(pattern);
+	p = p + 2;
+
+	for(i = 0; i < 9; i++)
+	{
+		if((*p >= '0') && (*p <= '9'))
+			a = *p - '0';
+		else if((*p >= 'a') && (*p <= 'f'))
+			a = *p - 'a' + 10;
+		else if((*p >= 'A') && (*p <= 'F'))
+			a = *p - 'A' + 10;
+
+		p++;
+		ret = a | ( ret<< 4);
+	}
+
+	return ret;
+}
+EXPORT_SYMBOL(fih_mmc_size);
+
+extern unsigned long long fih_mmc_usersize(void)
+{
+	unsigned char a = 0;
+	int i;
+
+	char *pattern = "emmc_user_size=";
+	char *p = strstr(saved_command_line, pattern);
+
+	unsigned long long  ret = 0;
+
+	if (p == NULL)
+		return ret;
+
+	p += strlen(pattern);
+	p = p + 2; 
+
+	for(i = 0; i < 9; i++)
+	{
+		if((*p >= '0') && (*p <= '9'))
+			a = *p - '0';
+		else if((*p >= 'a') && (*p <= 'f'))
+			a = *p - 'a' + 10;
+		else if((*p >= 'A') && (*p <= 'F'))
+			a = *p - 'A' + 10;
+
+		p++;
+		ret = a | ( ret<< 4);
+	}
+
+	return ret;
+}
+EXPORT_SYMBOL(fih_mmc_usersize);
+
+unsigned short fih_get_memory_type(void)
+{
+	unsigned char ddr = 0, none = 0, flash = 0;
+
+	char *pattern = "memory_type=";
+	char *p = strstr(saved_command_line, pattern);
+
+	unsigned short ret = 0;
+
+	if (p == NULL)
+		return ret;
+
+	p += strlen(pattern);
+	p = p + 2; // skip '0' & 'x'
+
+	flash = *p++ - '0';
+	none  = *p++ - '0';
+
+	if((*p >= '0') && (*p <= '9'))
+		ddr = *p - '0';
+	else if((*p >= 'a') && (*p <= 'f'))
+		ddr = *p - 'a' + 10;
+	else if((*p >= 'A') && (*p <= 'F'))
+		ddr = *p - 'A' + 10;
+
+	ret = ddr | (none << 4) | (flash << 8);
+
+	return ret;
+}
+EXPORT_SYMBOL(fih_get_memory_type);
+
+unsigned short fih_get_memory_vendor(void)
+{
+	unsigned char vendor = 0;
+
+	char *pattern = "ddr_vendor=";
+	char *p = strstr(saved_command_line, pattern);
+
+	unsigned short ret = 0;
+
+	if (p == NULL)
+		return ret;
+
+	p += strlen(pattern);
+	p = p + 2; // skip '0' & 'x'
+
+	if((*p >= '0') && (*p <= '9'))
+		vendor = *p - '0';
+	else if((*p >= 'a') && (*p <= 'f'))
+		vendor = *p - 'a' + 10;
+	else if((*p >= 'A') && (*p <= 'F'))
+		vendor = *p - 'A' + 10;
+
+	ret = vendor;
+	return ret;
+}
+EXPORT_SYMBOL(fih_get_memory_vendor);
+
+extern unsigned long long fih_get_emmc_size(void)
+{
+	unsigned char a = 0;
+	int i;
+
+	char *pattern = "emmc_total_size=";
+	char *p = strstr(saved_command_line, pattern);
+
+	unsigned long long  ret = 0;
+
+	if (p == NULL)
+		return ret;
+
+	p += strlen(pattern);
+	p = p + 2;
+
+	for(i = 0; i < 9; i++)
+	{
+		if((*p >= '0') && (*p <= '9'))
+			a = *p - '0';
+		else if((*p >= 'a') && (*p <= 'f'))
+			a = *p - 'a' + 10;
+		else if((*p >= 'A') && (*p <= 'F'))
+			a = *p - 'A' + 10;
+
+		p++;
+		ret = a | ( ret<< 4);
+	}
+	return ret;
+}
+EXPORT_SYMBOL(fih_get_emmc_size);
+
+extern unsigned long long fih_get_emmc_usersize(void)
+{
+	unsigned char a = 0;
+	int i;
+
+	char *pattern = "emmc_user_size=";
+	char *p = strstr(saved_command_line, pattern);
+
+	unsigned long long  ret = 0;
+
+	if (p == NULL)
+		return ret;
+
+	p += strlen(pattern);
+	p = p + 2; 
+
+	for(i = 0; i < 9; i++)
+	{
+		if((*p >= '0') && (*p <= '9'))
+			a = *p - '0';
+		else if((*p >= 'a') && (*p <= 'f'))
+			a = *p - 'a' + 10;
+		else if((*p >= 'A') && (*p <= 'F'))
+			a = *p - 'A' + 10;
+
+		p++;
+		ret = a | ( ret<< 4);
+	}
+
+	return ret;
+}
+EXPORT_SYMBOL(fih_get_emmc_usersize);
+
+unsigned char fih_get_ps_magnum(void)
+{
+	unsigned char ret = 0;
+	char *pattern = "psmanuf=0x";
+	char *p = strstr(saved_command_line, pattern);
+
+	//printk("p = %p, %s\n", p, p);
+
+	if (p == NULL)
+		return ret;
+
+	p += strlen(pattern);
+	sscanf(p, "%x", (unsigned int *)&ret);
+
+	return ret;
+}
+
+unsigned char fih_getcmd(void)
+{
+	unsigned char ret = 0;
+
+	char *pattern = "androidboot.mode=";
+	char *p = strstr(saved_command_line, pattern);
+
+	if (p == NULL)
+		return ret;
+
+	ret = *(p+17);
+
+	return ret;
+}
+
+
+int gsen_cali_x = 0;
+int gsen_cali_y = 0;
+int gsen_cali_z = 0;
+
+
+void fih_get_gensor_cmd(void)
+{
+	char *ptr1 = strstr(saved_command_line, "cali_x=");
+	char *ptr2 = strstr(saved_command_line, "cali_y=");
+	char *ptr3 = strstr(saved_command_line, "cali_z=");
+	
+	if(ptr1 == NULL || ptr2 == NULL || ptr3 == NULL)
+		return;
+	
+	ptr1 += strlen("cali_x=");
+	sscanf(ptr1, "%d", (int *)&gsen_cali_x);
+
+	ptr2 += strlen("cali_y=");
+	sscanf(ptr2, "%d", (int *)&gsen_cali_y);
+
+	ptr3 += strlen("cali_z=");
+	sscanf(ptr3, "%d", (int *)&gsen_cali_z);
+}
+
+
+bool fih_get_efuse_enable(void)
+{
+	bool ret = 0;
+
+	//strstr(str1, str2)
+	// str1 does not include str2, means securityfused=true
+	if (!strstr(saved_command_line, "androidboot.securityfused=false"))
+	{
+		ret = 1;
+	}
+	else
+	{
+		ret = 0;
+	}
+
+	return ret;
+}
+
+void fih_get_skuid(void)
+{
+	char *pattern = "androidboot.skuid=";
+	char *p = strstr(saved_command_line, pattern);
+
+	if (p == NULL)
+		return;
+
+	p += strlen(pattern);
+
+	strncpy(fih_skuid, p, 5);
+	//printk("fih_get_skuid fih_skuid = %s\n", fih_skuid);
+}
+/* END, for OEM feature, 20171201 */
+
+
 /*
  * We need to finalize in a non-__init function or else race conditions
  * between the root thread and the init thread may cause start_kernel to
@@ -471,7 +824,7 @@ void __init __weak smp_setup_processor_id(void)
 }
 
 # if THREAD_SIZE >= PAGE_SIZE
-void __init __weak thread_info_cache_init(void)
+void __init __weak thread_stack_cache_init(void)
 {
 }
 #endif
@@ -534,6 +887,18 @@ asmlinkage __visible void __init start_kernel(void)
 
 	build_all_zonelists(NULL, NULL);
 	page_alloc_init();
+
+	// OEM
+	fih_hwid = fih_gethwid();
+	if ( ((fih_hwid >> 8) != 0x4) && ((fih_hwid >> 8) != 0x5) )
+		fih_hwid = 0x411;
+
+	fih_efuse_enable = fih_get_efuse_enable();
+
+	fih_get_gensor_cmd();
+	//pr_notice("Alex x = %d, y = %d, z = %d\n", gsen_cali_x, gsen_cali_y, gsen_cali_z);
+
+	fih_get_skuid();
 
 	pr_notice("Kernel command line: %s\n", boot_command_line);
 	parse_early_param();
@@ -648,7 +1013,7 @@ asmlinkage __visible void __init start_kernel(void)
 	/* Should be run before the first non-init thread is created */
 	init_espfix_bsp();
 #endif
-	thread_info_cache_init();
+	thread_stack_cache_init();
 	cred_init();
 	fork_init();
 	proc_caches_init();
@@ -779,20 +1144,34 @@ static int __init_or_module do_one_initcall_debug(initcall_t fn)
 	return ret;
 }
 
+#ifdef CONFIG_MTPROF
+#include "bootprof.h"
+#else
+#define TIME_LOG_START()
+#define TIME_LOG_END()
+#define bootprof_initcall(fn, ts)
+#endif
+
 int __init_or_module do_one_initcall(initcall_t fn)
 {
 	int count = preempt_count();
 	int ret;
 	char msgbuf[64];
+#ifdef CONFIG_MTPROF
+	unsigned long long ts = 0;
+#endif
 
 	if (initcall_blacklisted(fn))
 		return -EPERM;
-
+#ifdef CONFIG_MTK_RAM_CONSOLE
+	aee_rr_rec_last_init_func((unsigned long)fn);
+#endif
+	TIME_LOG_START();
 	if (initcall_debug)
 		ret = do_one_initcall_debug(fn);
 	else
 		ret = fn();
-
+	TIME_LOG_END();
 	msgbuf[0] = 0;
 
 	if (preempt_count() != count) {
@@ -804,6 +1183,7 @@ int __init_or_module do_one_initcall(initcall_t fn)
 		local_irq_enable();
 	}
 	WARN(msgbuf[0], "initcall %pF returned with %s\n", fn, msgbuf);
+	bootprof_initcall(fn, ts);
 
 	return ret;
 }
@@ -865,6 +1245,10 @@ static void __init do_initcalls(void)
 
 	for (level = 0; level < ARRAY_SIZE(initcall_levels) - 1; level++)
 		do_initcall_level(level);
+#ifdef CONFIG_MTK_RAM_CONSOLE
+	aee_rr_rec_last_init_func(~(unsigned long)(0));
+#endif
+
 }
 
 /*
@@ -929,6 +1313,28 @@ static int try_to_run_init_process(const char *init_filename)
 
 static noinline void __init kernel_init_freeable(void);
 
+#ifdef CONFIG_DEBUG_RODATA
+static bool rodata_enabled = true;
+static int __init set_debug_rodata(char *str)
+{
+	return strtobool(str, &rodata_enabled);
+}
+__setup("rodata=", set_debug_rodata);
+
+static void mark_readonly(void)
+{
+	if (rodata_enabled)
+		mark_rodata_ro();
+	else
+		pr_info("Kernel memory protection disabled.\n");
+}
+#else
+static inline void mark_readonly(void)
+{
+	pr_warn("This architecture does not have kernel memory protection.\n");
+}
+#endif
+
 static int __ref kernel_init(void *unused)
 {
 	int ret;
@@ -937,11 +1343,15 @@ static int __ref kernel_init(void *unused)
 	/* need to finish all async __init code before freeing the memory */
 	async_synchronize_full();
 	free_initmem();
-	mark_rodata_ro();
+	mark_readonly();
 	system_state = SYSTEM_RUNNING;
 	numa_default_policy();
 
 	flush_delayed_fput();
+
+#ifdef CONFIG_MTPROF
+	log_boot("Kernel_init_done");
+#endif
 
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);
@@ -1038,3 +1448,22 @@ static noinline void __init kernel_init_freeable(void)
 	integrity_load_keys();
 	load_default_modules();
 }
+unsigned short fih_get_simslot(void)
+{
+        unsigned short ret = 0;
+
+        if (strstr(saved_command_line, "androidboot.simslot=1"))
+        {
+	pr_err("!!!!!!!!!!!!!!fih_get_simslot=1\n");
+                ret = 1;
+        }
+        else if(strstr(saved_command_line, "androidboot.simslot=2"))
+        {
+	pr_err("!!!!!!!!!!!!!!fih_get_simslot=2\n");
+                ret = 2;
+        }
+
+        return ret;
+}
+EXPORT_SYMBOL(fih_get_simslot);
+

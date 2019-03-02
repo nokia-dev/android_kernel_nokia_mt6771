@@ -362,6 +362,30 @@ int rtc_set_alarm(struct rtc_device *rtc, struct rtc_wkalrm *alarm)
 }
 EXPORT_SYMBOL_GPL(rtc_set_alarm);
 
+int rtc_set_alarm_poweron(struct rtc_device *rtc, struct rtc_wkalrm *alarm)
+{
+	int err;
+
+	err = rtc_valid_tm(&alarm->time);
+	if (err != 0)
+		return err;
+
+	err = mutex_lock_interruptible(&rtc->ops_lock);
+	if (err)
+		return err;
+
+	if (!rtc->ops)
+		err = -ENODEV;
+	else if (!rtc->ops->set_alarm)
+		err = -EINVAL;
+	else
+		err = rtc->ops->set_alarm(rtc->dev.parent, alarm);
+
+	mutex_unlock(&rtc->ops_lock);
+	return err;
+}
+EXPORT_SYMBOL_GPL(rtc_set_alarm_poweron);
+
 /* Called once per device from rtc_device_register */
 int rtc_initialize_alarm(struct rtc_device *rtc, struct rtc_wkalrm *alarm)
 {
@@ -748,13 +772,16 @@ EXPORT_SYMBOL_GPL(rtc_irq_set_freq);
  */
 static int rtc_timer_enqueue(struct rtc_device *rtc, struct rtc_timer *timer)
 {
-	struct timerqueue_node *next = timerqueue_getnext(&rtc->timerqueue);
+	struct timerqueue_node *next;
 	struct rtc_time tm;
 	ktime_t now;
 
 	timer->enabled = 1;
 	__rtc_read_time(rtc, &tm);
 	now = rtc_tm_to_ktime(tm);
+
+	timerqueue_add(&rtc->timerqueue, &timer->node);
+	next = timerqueue_getnext(&rtc->timerqueue);
 
 	/* Skip over expired timers */
 	while (next) {
@@ -763,8 +790,7 @@ static int rtc_timer_enqueue(struct rtc_device *rtc, struct rtc_timer *timer)
 		next = timerqueue_iterate_next(next);
 	}
 
-	timerqueue_add(&rtc->timerqueue, &timer->node);
-	if (!next) {
+	if (&timer->node == next) {
 		struct rtc_wkalrm alarm;
 		int err;
 		alarm.time = rtc_ktime_to_tm(timer->node.expires);

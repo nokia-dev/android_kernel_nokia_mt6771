@@ -1,0 +1,28 @@
+#
+# OEM driver
+#
+
+#Kernel Module sign key from FIH
+config MODULE_SIG_FIH
+	bool "Use static module sign key"
+	depends on MODULE_SIG
+	help
+	  Use the static module sign key
+	  in kernel/cert/fih/
+
+choice
+	prompt "Define fih sig key path"
+	depends on MODULE_SIG_FIH
+	default MODULE_SIG_KEY_IN_NORMAL
+	help
+	  fih sig key path
+
+config MODULE_SIG_KEY_IN_NORMAL
+	bool "Key for normal"
+
+endchoice
+
+config MODULE_SIG_FIH_KEY_PATH
+	string
+	depends on MODULE_SIG_FIH
+	default "../../../../../../kernel/certs/fih" if MODULE_SIG_KEY_IN_NORMAL

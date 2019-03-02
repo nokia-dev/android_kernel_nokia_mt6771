@@ -1,0 +1,9 @@
+#
+# Configuration for GOODIX
+#
+
+config GOODIX_FINGERPRINT
+	bool "GOODIX Driver"
+	default n
+	---help---
+	  This is a GOODIX chipset Driver.

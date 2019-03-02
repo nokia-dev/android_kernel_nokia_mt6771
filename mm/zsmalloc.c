@@ -65,6 +65,7 @@
 #include <linux/zsmalloc.h>
 #include <linux/zpool.h>
 
+#define ZSMALLOC_NO_FREE_FOR_CPU_DOWN
 /*
  * This must be power of 2 and greater than of equal to sizeof(link_free).
  * These two conditions ensure that any 'struct link_free' itself doesn't
@@ -124,7 +125,12 @@
  */
 #define OBJ_ALLOCATED_TAG 1
 #define OBJ_TAG_BITS 1
+#if BITS_PER_LONG == 32
+/* minus 1 bit for large DRAM (>3GB) */
+#define OBJ_INDEX_BITS	(BITS_PER_LONG - _PFN_BITS - OBJ_TAG_BITS - 1)
+#else
 #define OBJ_INDEX_BITS	(BITS_PER_LONG - _PFN_BITS - OBJ_TAG_BITS)
+#endif
 #define OBJ_INDEX_MASK	((_AC(1, UL) << OBJ_INDEX_BITS) - 1)
 
 #define MAX(a, b) ((a) >= (b) ? (a) : (b))
@@ -1044,9 +1050,11 @@ static inline int __zs_cpu_up(struct mapping_area *area)
 
 static inline void __zs_cpu_down(struct mapping_area *area)
 {
+#ifndef ZSMALLOC_NO_FREE_FOR_CPU_DOWN
 	if (area->vm)
 		free_vm_area(area->vm);
 	area->vm = NULL;
+#endif
 }
 
 static inline void *__zs_map_object(struct mapping_area *area,
@@ -1083,8 +1091,10 @@ static inline int __zs_cpu_up(struct mapping_area *area)
 
 static inline void __zs_cpu_down(struct mapping_area *area)
 {
+#ifndef ZSMALLOC_NO_FREE_FOR_CPU_DOWN
 	kfree(area->vm_buf);
 	area->vm_buf = NULL;
+#endif
 }
 
 static void *__zs_map_object(struct mapping_area *area,

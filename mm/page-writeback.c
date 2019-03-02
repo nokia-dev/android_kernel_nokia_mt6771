@@ -1925,6 +1925,22 @@ bool wb_over_bg_thresh(struct bdi_writeback *wb)
 	return false;
 }
 
+/*
+ * Check vmstat snapshot for throttling of vm_writeout
+ */
+static unsigned long check_vm_writeout_snapshot(void)
+{
+	struct zone *z;
+	unsigned long nr_vm_writeout = 0;
+
+	for_each_populated_zone(z) {
+		nr_vm_writeout += zone_page_state_snapshot(z, NR_WRITEBACK);
+		nr_vm_writeout += zone_page_state_snapshot(z, NR_UNSTABLE_NFS);
+	}
+
+	return nr_vm_writeout;
+}
+
 void throttle_vm_writeout(gfp_t gfp_mask)
 {
 	unsigned long background_thresh;
@@ -1943,6 +1959,14 @@ void throttle_vm_writeout(gfp_t gfp_mask)
                 if (global_page_state(NR_UNSTABLE_NFS) +
 			global_page_state(NR_WRITEBACK) <= dirty_thresh)
                         	break;
+
+		/*
+		 * Take a deeper look at NR_WRITEBACK & NR_UNSTABLE_NFS
+		 * before entering congestion_wait.
+		 */
+		if (check_vm_writeout_snapshot() <= dirty_thresh)
+			break;
+
                 congestion_wait(BLK_RW_ASYNC, HZ/10);
 
 		/*
@@ -1977,11 +2001,11 @@ void laptop_mode_timer_fn(unsigned long data)
 	 * We want to write everything out, not just down to the dirty
 	 * threshold
 	 */
-	if (!bdi_has_dirty_io(&q->backing_dev_info))
+	if (!bdi_has_dirty_io(q->backing_dev_info))
 		return;
 
 	rcu_read_lock();
-	list_for_each_entry_rcu(wb, &q->backing_dev_info.wb_list, bdi_node)
+	list_for_each_entry_rcu(wb, &q->backing_dev_info->wb_list, bdi_node)
 		if (wb_has_dirty_io(wb))
 			wb_start_writeback(wb, nr_pages, true,
 					   WB_REASON_LAPTOP_TIMER);

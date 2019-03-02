@@ -86,6 +86,12 @@ source "net/netlabel/Kconfig"
 
 endif # if INET
 
+config ANDROID_PARANOID_NETWORK
+	bool "Only allow certain groups to create sockets"
+	default y
+	help
+		none
+
 config NETWORK_SECMARK
 	bool "Security Marking"
 	help
@@ -388,3 +394,14 @@ endif   # if NET
 # Used by archs to tell that they support BPF_JIT
 config HAVE_BPF_JIT
 	bool
+
+config MTK_NET_LOGGING
+	bool "Enable MTK Network debug log"
+	---help---
+	  This config helps to enable/disable Network debug log
+
+config MTK_NET_RFC7217
+	bool "Enable stable privacy IPv6 address"
+	default n
+	---help---
+	  This config helps to enable/disable stable privacy IPv6 address

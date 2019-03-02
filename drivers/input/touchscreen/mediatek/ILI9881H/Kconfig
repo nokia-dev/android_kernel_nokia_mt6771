@@ -1,0 +1,16 @@
+#
+# ILITEK I2C Touchscreen driver
+#
+
+config TOUCHSCREEN_ILI9881H
+	tristate "ILITEK I2C touchscreen driver for linux platform"
+	default y
+	help
+	  This is the main file for touchpanel driver for ILITEK I2C
+	  touchscreens.
+
+	  Say Y here if you have a ILITEK I2C touchscreen connected
+	  to your system.
+
+	  If unsure, say N.
+

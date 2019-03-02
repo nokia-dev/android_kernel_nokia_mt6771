@@ -158,6 +158,14 @@ config ARM_ARCH_TIMER_EVTSTREAM
 	  This must be disabled for hardware validation purposes to detect any
 	  hardware anomalies of missing events.
 
+config ARM_ARCH_TIMER_VCT_ACCESS
+	bool "Support for ARM architected timer virtual counter access in userspace"
+	default !ARM64
+	depends on ARM_ARCH_TIMER
+	help
+	  This option enables support for reading the ARM architected timer's
+	  virtual counter in userspace.
+
 config ARM_GLOBAL_TIMER
 	bool
 	select CLKSRC_OF if OF
@@ -326,5 +334,29 @@ config CLKSRC_ST_LPC
 	help
 	  Enable this option to use the Low Power controller timer
 	  as clocksource.
+
+config ARM64_ERRATUM_858921
+	bool "Cortex-A73: 858921: arch timer counter read can return a wrong value"
+	default n
+	depends on ARM_ARCH_TIMER && ARM64
+	help
+	  This option enables a workaround applicable to Cortex-A73
+	  (all versions), whose counter may return incorrect values.
+	  The workaround will be dynamically enabled when an affected
+	  core is detected. This option is specified for 64-bit platforms.
+
+	  If unsure, say Y.
+
+config ARM_ERRATA_858921
+	bool "Cortex-A73: 858921: arch timer counter read can return a wrong value"
+	default n
+	depends on ARM_ARCH_TIMER && !ARM64
+	help
+	  This option enables a workaround applicable to Cortex-A73
+	  (all versions), whose counter may return incorrect values.
+	  The workaround will be dynamically enabled when an affected
+	  core is detected. This option is specified for 32-bit platforms.
+
+	  If unsure, say Y.
 
 endmenu

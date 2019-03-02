@@ -32,6 +32,8 @@
 
 #include <asm/uaccess.h>
 
+#include <mt-plat/fpsgo_common.h>
+
 
 /*
  * Estimate expected accuracy in ns from a timeval.
@@ -70,9 +72,9 @@ static long __estimate_accuracy(struct timespec *tv)
 	return slack;
 }
 
-long select_estimate_accuracy(struct timespec *tv)
+u64 select_estimate_accuracy(struct timespec *tv)
 {
-	unsigned long ret;
+	u64 ret;
 	struct timespec now;
 
 	/*
@@ -237,8 +239,13 @@ int poll_schedule_timeout(struct poll_wqueues *pwq, int state,
 	int rc = -EINTR;
 
 	set_current_state(state);
-	if (!pwq->triggered)
+	if (!pwq->triggered) {
+		if (expires && expires->tv64)
+			xgf_igather_timer(current, 1);
 		rc = schedule_hrtimeout_range(expires, slack, HRTIMER_MODE_ABS);
+		if (expires && expires->tv64)
+			xgf_igather_timer(current, rc ? -1 : 0);
+	}
 	__set_current_state(TASK_RUNNING);
 
 	/*
@@ -402,7 +409,7 @@ int do_select(int n, fd_set_bits *fds, struct timespec *end_time)
 	struct poll_wqueues table;
 	poll_table *wait;
 	int retval, i, timed_out = 0;
-	unsigned long slack = 0;
+	u64 slack = 0;
 	unsigned int busy_flag = net_busy_loop_on() ? POLL_BUSY_LOOP : 0;
 	unsigned long busy_end = 0;
 
@@ -784,7 +791,7 @@ static int do_poll(unsigned int nfds,  struct poll_list *list,
 	poll_table* pt = &wait->pt;
 	ktime_t expire, *to = NULL;
 	int timed_out = 0, count = 0;
-	unsigned long slack = 0;
+	u64 slack = 0;
 	unsigned int busy_flag = net_busy_loop_on() ? POLL_BUSY_LOOP : 0;
 	unsigned long busy_end = 0;
 

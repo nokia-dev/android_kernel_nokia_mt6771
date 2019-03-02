@@ -1,0 +1,9 @@
+#
+# Configuration for ZEITECSEMI
+#
+
+config ZET_ZFS1670A
+	bool "ZEITECSEMI ZFS1670A Driver"
+	default n
+	---help---
+	  This is a ZEITECSEMI ZFS1670A chipset Driver.
